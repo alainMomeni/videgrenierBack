@@ -1,6 +1,4 @@
-// backend/routes/uploadRoutes.js
-const express = require('express');
-const router = express.Router();
+// backend/controllers/uploadController.js
 const cloudinary = require('../config/cloudinary');
 const multer = require('multer');
 
@@ -22,16 +20,14 @@ const upload = multer({
   },
 });
 
-// Route pour uploader une image produit vers Cloudinary
-router.post('/product-image', upload.single('image'), async (req, res) => {
+// Upload vers Cloudinary
+const uploadToCloudinary = async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'No file uploaded' });
     }
 
     console.log('📤 Uploading image to Cloudinary...');
-    console.log('📄 File size:', req.file.size, 'bytes');
-    console.log('📄 File type:', req.file.mimetype);
 
     // Uploader vers Cloudinary
     const result = await new Promise((resolve, reject) => {
@@ -45,13 +41,8 @@ router.post('/product-image', upload.single('image'), async (req, res) => {
           ],
         },
         (error, result) => {
-          if (error) {
-            console.error('❌ Cloudinary upload error:', error);
-            reject(error);
-          } else {
-            console.log('✅ Image uploaded successfully to Cloudinary');
-            resolve(result);
-          }
+          if (error) reject(error);
+          else resolve(result);
         }
       );
 
@@ -59,23 +50,24 @@ router.post('/product-image', upload.single('image'), async (req, res) => {
       uploadStream.end(req.file.buffer);
     });
 
-    console.log('🔗 Cloudinary URL:', result.secure_url);
-    console.log('🆔 Public ID:', result.public_id);
+    console.log('✅ Image uploaded successfully to Cloudinary');
+    console.log('🔗 URL:', result.secure_url);
 
     res.json({
       message: 'Image uploaded successfully',
       imageUrl: result.secure_url, // URL complète de Cloudinary
       publicId: result.public_id,
-      width: result.width,
-      height: result.height,
     });
   } catch (error) {
-    console.error('❌ Upload error:', error);
+    console.error('❌ Cloudinary upload error:', error);
     res.status(500).json({ 
       message: 'Failed to upload image',
       error: error.message 
     });
   }
-});
+};
 
-module.exports = router;
+module.exports = {
+  upload,
+  uploadToCloudinary,
+};
