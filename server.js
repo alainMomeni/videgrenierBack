@@ -14,7 +14,7 @@ const salesRoutes = require('./routes/salesRoutes');
 const reviewRoutes = require('./routes/reviewRoutes');
 const userRoutes = require('./routes/userRoutes');
 const uploadRoutes = require('./routes/uploadRoutes');
-const newsletterRoutes = require('./routes/newsletterRoutes'); // NOUVEAU
+const newsletterRoutes = require('./routes/newsletterRoutes');
 
 // Import du middleware
 const checkBlockedStatus = require('./middleware/checkBlockedStatus');
@@ -22,33 +22,64 @@ const checkBlockedStatus = require('./middleware/checkBlockedStatus');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Créer le dossier uploads s'il n'existe pas
+// Créer le dossier uploads s'il n'existe pas (pour développement local)
 const uploadsDir = path.join(__dirname, 'uploads/products');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
-  console.log('Created uploads/products directory');
+  console.log('✅ Created uploads/products directory');
 }
 
-// Middleware
+// ===========================================
+// CONFIGURATION CORS
+// ===========================================
+
+const allowedOrigins = process.env.NODE_ENV === 'production' 
+  ? [
+      'https://votre-frontend-url.onrender.com', // À METTRE À JOUR avec votre URL frontend
+      process.env.FRONTEND_URL
+    ].filter(Boolean)
+  : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000'];
+
 app.use(cors({
-  origin: 'http://localhost:5173',
+  origin: function(origin, callback) {
+    // Autoriser les requêtes sans origine (comme les apps mobiles ou Postman)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV !== 'production') {
+      callback(null, true);
+    } else {
+      console.log('❌ CORS blocked origin:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true
 }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+
+// ===========================================
+// MIDDLEWARE
+// ===========================================
+
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Servir les fichiers statiques (images uploadées)
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// Logger middleware
-app.use((req, res, next) => {
-  console.log(`${req.method} ${req.path}`);
-  next();
-});
+// Logger middleware (uniquement en développement)
+if (process.env.NODE_ENV !== 'production') {
+  app.use((req, res, next) => {
+    console.log(`${req.method} ${req.path}`);
+    next();
+  });
+}
+
+// ===========================================
+// ROUTES
+// ===========================================
 
 // Routes publiques (pas de vérification de blocage)
 app.use('/api/auth', authRoutes);
-app.use('/api/newsletters', newsletterRoutes); // NOUVEAU - partiellement public
+app.use('/api/newsletters', newsletterRoutes);
 
 // Routes protégées avec vérification de blocage
 app.use('/api/products', checkBlockedStatus, productRoutes);
@@ -59,11 +90,25 @@ app.use('/api/reviews', checkBlockedStatus, reviewRoutes);
 app.use('/api/users', checkBlockedStatus, userRoutes);
 app.use('/api/upload', checkBlockedStatus, uploadRoutes);
 
-// Route racine
+// ===========================================
+// HEALTH CHECK & ROOT ROUTES
+// ===========================================
+
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'OK', 
+    message: 'Server is running',
+    environment: process.env.NODE_ENV || 'development',
+    timestamp: new Date().toISOString()
+  });
+});
+
 app.get('/', (req, res) => {
   res.json({ 
-    message: 'API VideGrenier is running...',
+    message: 'Vide Grenier Kamer API',
     version: '1.0.0',
+    status: 'Running',
+    environment: process.env.NODE_ENV || 'development',
     endpoints: {
       auth: '/api/auth',
       products: '/api/products',
@@ -73,10 +118,15 @@ app.get('/', (req, res) => {
       reviews: '/api/reviews',
       users: '/api/users',
       upload: '/api/upload',
-      newsletters: '/api/newsletters'
+      newsletters: '/api/newsletters',
+      health: '/health'
     }
   });
 });
+
+// ===========================================
+// ERROR HANDLING
+// ===========================================
 
 // Route 404
 app.use((req, res) => {
@@ -85,23 +135,39 @@ app.use((req, res) => {
 
 // Gestionnaire d'erreurs global
 app.use((err, req, res, next) => {
-  console.error('Error:', err.stack);
+  console.error('❌ Error:', err.stack);
   res.status(500).json({ 
     message: 'Something went wrong!',
-    error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    error: process.env.NODE_ENV === 'production' ? {} : err.message
   });
 });
 
-// Démarrer le serveur
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`API available at http://localhost:${PORT}`);
-  console.log(`Frontend should be running at http://localhost:5173`);
-  console.log(`Uploads directory: ${uploadsDir}`);
+// ===========================================
+// START SERVER
+// ===========================================
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log('===========================================');
+  console.log(`🚀 Server running in ${process.env.NODE_ENV || 'development'} mode`);
+  console.log(`📡 Server listening on port ${PORT}`);
+  console.log(`🔗 Backend URL: ${process.env.NODE_ENV === 'production' ? 'https://videgrenierback.onrender.com' : `http://localhost:${PORT}`}`);
+  console.log(`📁 Uploads directory: ${uploadsDir}`);
+  console.log(`✅ CORS allowed origins:`, allowedOrigins);
+  console.log('===========================================');
 });
 
-// Gérer les arrêts propres
+// ===========================================
+// GRACEFUL SHUTDOWN
+// ===========================================
+
 process.on('SIGINT', () => {
-  console.log('\nShutting down server...');
+  console.log('\n🛑 Shutting down server gracefully...');
   process.exit(0);
 });
+
+process.on('SIGTERM', () => {
+  console.log('\n🛑 Shutting down server gracefully...');
+  process.exit(0);
+});
+
+module.exports = app;
