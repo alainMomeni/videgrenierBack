@@ -15,7 +15,9 @@
     "users:delete": "node scripts/deleteUsers.js",
     "users:delete-all": "node scripts/deleteAllUsers.js",
     "users:delete-by-email": "node scripts/deleteUsersByEmail.js",
-    "test:auth": "node scripts/testAuth.js"
+    "test:auth": "node scripts/testAuth.js",
+    "users:empty": "node scripts/emptyUsers.js",
+    "users:empty-sql": "node scripts/emptyUsersSQL.js"
   },
   "engines": {
     "node": ">=18.0.0",

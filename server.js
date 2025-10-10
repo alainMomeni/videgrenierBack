@@ -22,7 +22,7 @@ const checkBlockedStatus = require('./middleware/checkBlockedStatus');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Créer le dossier uploads s'il n'existe pas (pour développement local)
+// Créer le dossier uploads s'il n'existe pas
 const uploadsDir = path.join(__dirname, 'uploads/products');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -35,24 +35,32 @@ if (!fs.existsSync(uploadsDir)) {
 
 const allowedOrigins = process.env.NODE_ENV === 'production' 
   ? [
-      'https://votre-frontend-url.onrender.com', // À METTRE À JOUR avec votre URL frontend
-      process.env.FRONTEND_URL
+      'https://videgrenier-pi.vercel.app', // ✅ Votre frontend Vercel
+      process.env.FRONTEND_URL,
     ].filter(Boolean)
-  : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000'];
+  : [
+      'http://localhost:5173',
+      'http://localhost:5174',
+      'http://localhost:3000',
+      'http://127.0.0.1:5173',
+    ];
 
 app.use(cors({
   origin: function(origin, callback) {
-    // Autoriser les requêtes sans origine (comme les apps mobiles ou Postman)
+    // Autoriser les requêtes sans origine (Postman, apps mobiles, etc.)
     if (!origin) return callback(null, true);
     
-    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV !== 'production') {
+    if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      console.log('❌ CORS blocked origin:', origin);
-      callback(new Error('Not allowed by CORS'));
+      console.log('⚠️ CORS blocked origin:', origin);
+      // En production, autoriser quand même temporairement pour debug
+      callback(null, true);
     }
   },
-  credentials: true
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 // ===========================================
@@ -97,9 +105,10 @@ app.use('/api/upload', checkBlockedStatus, uploadRoutes);
 app.get('/health', (req, res) => {
   res.status(200).json({ 
     status: 'OK', 
-    message: 'Server is running',
+    message: 'Vide Grenier Kamer API is running',
     environment: process.env.NODE_ENV || 'development',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    version: '1.0.0'
   });
 });
 
@@ -110,6 +119,7 @@ app.get('/', (req, res) => {
     status: 'Running',
     environment: process.env.NODE_ENV || 'development',
     endpoints: {
+      health: '/health',
       auth: '/api/auth',
       products: '/api/products',
       stock: '/api/stock',
@@ -119,7 +129,6 @@ app.get('/', (req, res) => {
       users: '/api/users',
       upload: '/api/upload',
       newsletters: '/api/newsletters',
-      health: '/health'
     }
   });
 });
