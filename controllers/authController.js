@@ -3,7 +3,9 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { query } = require('../db');
 const crypto = require('crypto');
-const { sendVerificationEmail, sendWelcomeEmail } = require('../services/emailService');
+
+// ✅ UTILISATION DE L'API BREVO AU LIEU DE SMTP
+const { sendVerificationEmail, sendWelcomeEmail } = require('../services/emailServiceAPI');
 
 // ============================================
 // REGISTER (SIGNUP)
@@ -63,6 +65,7 @@ exports.register = async (req, res) => {
       console.error('❌ ========================================');
       console.error('❌ VERIFICATION EMAIL SENDING FAILED');
       console.error('❌ Error:', emailError.message);
+      console.error('❌ Stack:', emailError.stack);
       console.error('❌ ========================================');
       
       await query('DELETE FROM users WHERE id = $1', [newUser.id]);
@@ -91,6 +94,7 @@ exports.register = async (req, res) => {
     console.error('❌ ========================================');
     console.error('❌ SIGNUP ERROR');
     console.error('❌ Error:', error.message);
+    console.error('❌ Stack:', error.stack);
     console.error('❌ ========================================');
     res.status(500).json({ message: 'Server error during signup' });
   }
