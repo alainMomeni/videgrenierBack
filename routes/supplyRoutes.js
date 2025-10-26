@@ -5,14 +5,19 @@ const {
   getAllSupplies, 
   createSupply, 
   updateSupply, 
-  deleteSupply,
-  getAllSuppliers 
+  deleteSupply
 } = require('../controllers/supplyController');
 
+// GET tous les approvisionnements
 router.get('/', getAllSupplies);
-router.get('/suppliers', getAllSuppliers);
+
+// CREATE un nouvel approvisionnement
 router.post('/', createSupply);
+
+// UPDATE un approvisionnement
 router.put('/:id', updateSupply);
+
+// DELETE un approvisionnement
 router.delete('/:id', deleteSupply);
 
 module.exports = router;

@@ -5,7 +5,7 @@ const { query } = require('../db');
 const crypto = require('crypto');
 
 // ✅ UTILISATION DE L'API BREVO AU LIEU DE SMTP
-const { sendVerificationEmail, sendWelcomeEmail } = require('../services/emailServiceAPI');
+const { sendVerificationEmail, sendWelcomeEmail, sendPasswordResetEmail } = require('../services/emailServiceAPI');
 
 // ============================================
 // REGISTER (SIGNUP)
@@ -170,7 +170,7 @@ exports.login = async (req, res) => {
 };
 
 // ============================================
-// VERIFY EMAIL - TOUJOURS RETOURNER SUCCESS
+// VERIFY EMAIL
 // ============================================
 exports.verifyEmail = async (req, res) => {
   try {
@@ -188,17 +188,14 @@ exports.verifyEmail = async (req, res) => {
       });
     }
 
-    // Chercher l'utilisateur avec ce token
     const result = await query(
       'SELECT * FROM users WHERE verification_token = $1',
       [token]
     );
 
-    // SI LE TOKEN N'EXISTE PAS - Retourner succès quand même
     if (result.rows.length === 0) {
       console.log('⚠️ Token not found - may have been already used');
       
-      // Retourner un succès car probablement déjà vérifié
       return res.json({ 
         message: 'Your email has been verified! You can now log in.',
         success: true,
@@ -212,7 +209,6 @@ exports.verifyEmail = async (req, res) => {
 
     const user = result.rows[0];
 
-    // SI L'EMAIL EST DÉJÀ VÉRIFIÉ - Retourner succès
     if (user.email_verified) {
       console.log('✅ Email already verified for:', user.email);
       return res.json({ 
@@ -226,7 +222,6 @@ exports.verifyEmail = async (req, res) => {
       });
     }
 
-    // SI LE TOKEN EST EXPIRÉ - Retourner succès mais avec option de renvoyer
     if (user.verification_token_expires && new Date(user.verification_token_expires) < new Date()) {
       console.log('⚠️ Token expired for:', user.email);
       return res.json({ 
@@ -243,7 +238,6 @@ exports.verifyEmail = async (req, res) => {
 
     console.log('✅ Valid token found for user:', user.email);
 
-    // Vérifier l'email
     await query(
       `UPDATE users 
        SET email_verified = true, 
@@ -258,7 +252,6 @@ exports.verifyEmail = async (req, res) => {
     console.log('✅ User:', user.email);
     console.log('✅ ========================================');
 
-    // Envoyer email de bienvenue
     try {
       await sendWelcomeEmail(user.email, user.first_name);
       console.log('✅ Welcome email sent');
@@ -328,6 +321,119 @@ exports.resendVerificationEmail = async (req, res) => {
   } catch (error) {
     console.error('❌ ========================================');
     console.error('❌ RESEND VERIFICATION ERROR');
+    console.error('❌ Error:', error.message);
+    console.error('❌ ========================================');
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// ============================================
+// FORGOT PASSWORD - Demander un reset
+// ============================================
+exports.forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    console.log('🔐 ========================================');
+    console.log('🔐 PASSWORD RESET REQUEST');
+    console.log('🔐 Email:', email);
+    console.log('🔐 ========================================');
+
+    if (!email) {
+      return res.status(400).json({ message: 'Email is required' });
+    }
+
+    const userResult = await query('SELECT id, first_name, email FROM users WHERE email = $1', [email]);
+
+    if (userResult.rows.length === 0) {
+      console.log('⚠️ Email not found, but returning success message');
+      return res.json({ 
+        message: 'If an account with this email exists, a password reset link has been sent.' 
+      });
+    }
+
+    const user = userResult.rows[0];
+
+    const resetToken = jwt.sign(
+      { userId: user.id, email: user.email, type: 'password-reset' },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    console.log('✅ Reset token generated');
+
+    await sendPasswordResetEmail(user.email, resetToken, user.first_name);
+
+    console.log('✅ ========================================');
+    console.log('✅ PASSWORD RESET EMAIL SENT');
+    console.log('✅ ========================================');
+
+    res.json({ 
+      message: 'If an account with this email exists, a password reset link has been sent.' 
+    });
+  } catch (error) {
+    console.error('❌ ========================================');
+    console.error('❌ FORGOT PASSWORD ERROR');
+    console.error('❌ Error:', error.message);
+    console.error('❌ ========================================');
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// ============================================
+// RESET PASSWORD - Réinitialiser avec token
+// ============================================
+exports.resetPassword = async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+
+    console.log('🔐 ========================================');
+    console.log('🔐 PASSWORD RESET ATTEMPT');
+    console.log('🔐 ========================================');
+
+    if (!token || !newPassword) {
+      return res.status(400).json({ message: 'Token and new password are required' });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (err) {
+      console.log('❌ Invalid or expired token');
+      return res.status(400).json({ message: 'Invalid or expired reset link' });
+    }
+
+    if (decoded.type !== 'password-reset') {
+      return res.status(400).json({ message: 'Invalid reset token' });
+    }
+
+    const userResult = await query('SELECT id, email FROM users WHERE id = $1', [decoded.userId]);
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(newPassword, salt);
+
+    await query(
+      'UPDATE users SET password_hash = $1 WHERE id = $2',
+      [passwordHash, decoded.userId]
+    );
+
+    console.log('✅ ========================================');
+    console.log('✅ PASSWORD RESET SUCCESSFUL');
+    console.log('✅ User ID:', decoded.userId);
+    console.log('✅ ========================================');
+
+    res.json({ message: 'Password reset successfully. You can now log in with your new password.' });
+  } catch (error) {
+    console.error('❌ ========================================');
+    console.error('❌ RESET PASSWORD ERROR');
     console.error('❌ Error:', error.message);
     console.error('❌ ========================================');
     res.status(500).json({ message: 'Server error' });

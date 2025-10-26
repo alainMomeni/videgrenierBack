@@ -9,10 +9,14 @@ router.post('/login', authController.login);
 router.get('/verify-email', authController.verifyEmail);
 router.post('/resend-verification', authController.resendVerificationEmail);
 
+// ✅ NOUVEAU : Routes pour la réinitialisation du mot de passe
+router.post('/forgot-password', authController.forgotPassword);
+router.post('/reset-password', authController.resetPassword);
+
 // Route de test pour vérifier l'envoi d'email
 router.get('/test-email', async (req, res) => {
   try {
-    const { sendVerificationEmail } = require('../services/emailService');
+    const { sendVerificationEmail } = require('../services/emailServiceAPI');
     
     console.log('🧪 Testing email sending...');
     

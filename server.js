@@ -15,6 +15,7 @@ const reviewRoutes = require('./routes/reviewRoutes');
 const userRoutes = require('./routes/userRoutes');
 const uploadRoutes = require('./routes/uploadRoutes');
 const newsletterRoutes = require('./routes/newsletterRoutes');
+const contactRoutes = require('./routes/contactRoutes'); // ✅ AJOUTER
 
 // Import du middleware
 const checkBlockedStatus = require('./middleware/checkBlockedStatus');
@@ -88,6 +89,7 @@ if (process.env.NODE_ENV !== 'production') {
 // Routes publiques (pas de vérification de blocage)
 app.use('/api/auth', authRoutes);
 app.use('/api/newsletters', newsletterRoutes);
+app.use('/api/contact', contactRoutes); // ✅ AJOUTER
 
 // Routes protégées avec vérification de blocage
 app.use('/api/products', checkBlockedStatus, productRoutes);
@@ -129,6 +131,7 @@ app.get('/', (req, res) => {
       users: '/api/users',
       upload: '/api/upload',
       newsletters: '/api/newsletters',
+      contact: '/api/contact', // ✅ AJOUTER
     }
   });
 });

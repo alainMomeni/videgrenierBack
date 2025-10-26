@@ -1,10 +1,9 @@
 // backend/middleware/checkBlockedStatus.js
-const db = require('../db');
+const { query } = require('../db');
 
 const checkBlockedStatus = async (req, res, next) => {
   try {
     // Récupérer l'ID utilisateur depuis le token JWT décodé
-    // (assumant que vous avez un middleware auth qui met req.user.id)
     const userId = req.user?.id;
     
     if (!userId) {
@@ -12,7 +11,7 @@ const checkBlockedStatus = async (req, res, next) => {
     }
     
     // Vérifier le statut bloqué
-    const result = await db.query(
+    const result = await query(
       'SELECT is_blocked FROM users WHERE id = $1',
       [userId]
     );
@@ -26,7 +25,7 @@ const checkBlockedStatus = async (req, res, next) => {
     
     next();
   } catch (error) {
-    console.error('Error checking blocked status:', error);
+    console.error('❌ Error checking blocked status:', error);
     next();
   }
 };

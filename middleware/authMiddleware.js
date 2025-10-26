@@ -1,0 +1,1 @@
+// backend/middleware/authMiddleware.js

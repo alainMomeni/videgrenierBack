@@ -17,7 +17,8 @@
     "users:delete-by-email": "node scripts/deleteUsersByEmail.js",
     "test:auth": "node scripts/testAuth.js",
     "users:empty": "node scripts/emptyUsers.js",
-    "users:empty-sql": "node scripts/emptyUsersSQL.js"
+    "users:empty-sql": "node scripts/emptyUsersSQL.js",
+    "admin:create": "node scripts/createAdmin.js"
   },
   "engines": {
     "node": ">=18.0.0",

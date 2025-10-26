@@ -1,17 +1,25 @@
 // backend/controllers/salesController.js
-const { query, pool } = require('../db'); // ← CORRECTION ICI
+const { query, pool } = require('../db');
 
-// GET toutes les ventes
+// ============================================
+// GET TOUTES LES VENTES
+// ============================================
 exports.getAllSales = async (req, res) => {
   try {
     const { sellerId } = req.query;
+
+    console.log('📊 ========================================');
+    console.log('📊 GET ALL SALES REQUEST');
+    console.log('📊 Seller ID filter:', sellerId);
+    console.log('📊 ========================================');
     
     let queryStr = `
       SELECT 
         s.id_sale, 
         s.order_id, 
         s.id_produit, 
-        s.id_seller, 
+        s.id_seller,
+        s.id_buyer,
         s.buyer_name, 
         s.buyer_email, 
         s.quantity, 
@@ -21,38 +29,53 @@ exports.getAllSales = async (req, res) => {
         s.status, 
         s.payment_method,
         p.nom_produit,
-        p.photo
+        p.photo,
+        CONCAT(seller.first_name, ' ', seller.last_name) as seller_name,
+        CONCAT(buyer.first_name, ' ', buyer.last_name) as buyer_full_name
       FROM sales s
       LEFT JOIN products p ON s.id_produit = p.id_produit
+      LEFT JOIN users seller ON s.id_seller = seller.id
+      LEFT JOIN users buyer ON s.id_buyer = buyer.id
     `;
     
     const params = [];
     if (sellerId) {
       queryStr += ' WHERE s.id_seller = $1';
       params.push(sellerId);
+      console.log('✅ Filtering by seller ID:', sellerId);
     }
     
     queryStr += ' ORDER BY s.sale_date DESC';
     
     const result = await query(queryStr, params);
+    
+    console.log('✅ Sales found:', result.rows.length);
+    console.log('✅ ========================================');
+    
     res.json(result.rows);
   } catch (error) {
-    console.error(error.message);
+    console.error('❌ Error fetching sales:', error.message);
     res.status(500).json({ message: 'Server error' });
   }
 };
 
-// GET une vente par ID
+// ============================================
+// GET UNE VENTE PAR ID
+// ============================================
 exports.getSaleById = async (req, res) => {
   try {
     const { id } = req.params;
     const result = await query(
       `SELECT 
-        s.*, 
+        s.*,
         p.nom_produit,
-        p.photo
+        p.photo,
+        CONCAT(seller.first_name, ' ', seller.last_name) as seller_name,
+        CONCAT(buyer.first_name, ' ', buyer.last_name) as buyer_full_name
       FROM sales s
       LEFT JOIN products p ON s.id_produit = p.id_produit
+      LEFT JOIN users seller ON s.id_seller = seller.id
+      LEFT JOIN users buyer ON s.id_buyer = buyer.id
       WHERE s.id_sale = $1`,
       [id]
     );
@@ -63,31 +86,45 @@ exports.getSaleById = async (req, res) => {
     
     res.json(result.rows[0]);
   } catch (error) {
-    console.error(error.message);
+    console.error('❌ Error fetching sale:', error.message);
     res.status(500).json({ message: 'Server error' });
   }
 };
 
-// POST créer une vente avec mise à jour automatique du stock
+// ============================================
+// CREATE SALE
+// ============================================
 exports.createSale = async (req, res) => {
   const client = await pool.connect();
   
   try {
     const { 
       id_produit, 
-      buyer_name, 
-      buyer_email, 
       quantity, 
       payment_method,
       shipping_address
     } = req.body;
 
-    if (!id_produit || !buyer_name || !buyer_email || !quantity || !payment_method) {
+    // ✅ RÉCUPÉRER L'UTILISATEUR CONNECTÉ (snake_case)
+    const userId = req.user.id;
+    const buyer_name = `${req.user.first_name} ${req.user.last_name}`;
+    const buyer_email = req.user.email;
+
+    console.log('🛒 ========================================');
+    console.log('🛒 CREATING NEW SALE');
+    console.log('🛒 Product ID:', id_produit);
+    console.log('🛒 Quantity:', quantity);
+    console.log('🛒 Buyer:', buyer_name, `(ID: ${userId})`);
+    console.log('🛒 Buyer Email:', buyer_email);
+    console.log('🛒 ========================================');
+
+    if (!id_produit || !quantity || !payment_method) {
       return res.status(400).json({ message: 'Missing required fields' });
     }
 
     await client.query('BEGIN');
 
+    // Vérifier le produit
     const productResult = await client.query(
       'SELECT id_produit, nom_produit, prix, quantite, id_user FROM products WHERE id_produit = $1',
       [id_produit]
@@ -100,6 +137,7 @@ exports.createSale = async (req, res) => {
 
     const product = productResult.rows[0];
 
+    // Vérifier le stock disponible
     if (product.quantite < quantity) {
       await client.query('ROLLBACK');
       return res.status(400).json({ 
@@ -112,11 +150,13 @@ exports.createSale = async (req, res) => {
     const total_amount = unit_price * quantity;
     const order_id = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
 
+    // 1. Créer la vente avec id_buyer
     const saleResult = await client.query(
       `INSERT INTO sales (
         order_id, 
         id_produit, 
-        id_seller, 
+        id_seller,
+        id_buyer,
         buyer_name, 
         buyer_email, 
         quantity, 
@@ -124,12 +164,13 @@ exports.createSale = async (req, res) => {
         total_amount, 
         payment_method,
         status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
       RETURNING *`,
       [
         order_id,
         id_produit,
-        product.id_user,
+        product.id_user, // seller
+        userId, // buyer
         buyer_name,
         buyer_email,
         quantity,
@@ -140,36 +181,84 @@ exports.createSale = async (req, res) => {
       ]
     );
 
+    console.log('✅ Sale created:', order_id);
+
+    // 2. Mettre à jour la quantité du produit
     await client.query(
       'UPDATE products SET quantite = quantite - $1 WHERE id_produit = $2',
       [quantity, id_produit]
     );
 
-    const currentDate = new Date();
-    const currentMonth = currentDate.getMonth() + 1;
-    const currentYear = currentDate.getFullYear();
-    const firstDayOfMonth = new Date(currentYear, currentMonth - 1, 1);
+    console.log('✅ Product quantity reduced');
 
-    const stockRecordResult = await client.query(
-      `SELECT id_stock, stock_actuel, quantite_vendu_mois 
-       FROM stock_records 
-       WHERE id_produit = $1 AND date >= $2
-       ORDER BY date DESC 
+    // 3. Obtenir ou créer le stock du mois en cours
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = today.getMonth() + 1;
+    const firstDayOfMonth = new Date(year, month - 1, 1);
+
+    const currentStockResult = await client.query(
+      `SELECT * FROM stock_records 
+       WHERE id_produit = $1 
+       AND EXTRACT(YEAR FROM date) = $2 
+       AND EXTRACT(MONTH FROM date) = $3
+       ORDER BY date DESC
        LIMIT 1`,
-      [id_produit, firstDayOfMonth]
+      [id_produit, year, month]
     );
 
-    if (stockRecordResult.rows.length > 0) {
-      const stockRecord = stockRecordResult.rows[0];
-      await client.query(
-        `UPDATE stock_records 
-         SET stock_actuel = stock_actuel - $1,
-             quantite_vendu_mois = quantite_vendu_mois + $1,
-             valeur_stock = (stock_actuel - $1) * prix_unitaire
-         WHERE id_stock = $2`,
-        [quantity, stockRecord.id_stock]
+    let currentStock;
+
+    if (currentStockResult.rows.length > 0) {
+      currentStock = currentStockResult.rows[0];
+    } else {
+      const previousStockResult = await client.query(
+        `SELECT * FROM stock_records 
+         WHERE id_produit = $1 
+         AND date < $2
+         ORDER BY date DESC
+         LIMIT 1`,
+        [id_produit, firstDayOfMonth]
       );
+
+      let quantite_ouverture = 0;
+      if (previousStockResult.rows.length > 0) {
+        quantite_ouverture = previousStockResult.rows[0].stock_actuel || 0;
+      } else {
+        quantite_ouverture = product.quantite + quantity;
+      }
+
+      const valeur_stock = quantite_ouverture * unit_price;
+
+      const newStockResult = await client.query(
+        `INSERT INTO stock_records (
+          date, id_produit, quantite_ouverture_mois, quantite_vendu_mois,
+          stock_actuel, quantite_approvisionner, valeur_stock, prix_unitaire
+        ) VALUES ($1, $2, $3, 0, $4, 0, $5, $6)
+        RETURNING *`,
+        [firstDayOfMonth, id_produit, quantite_ouverture, quantite_ouverture, valeur_stock, unit_price]
+      );
+
+      currentStock = newStockResult.rows[0];
     }
+
+    // 4. Mettre à jour le stock du mois en cours
+    const newQuantiteVendu = parseInt(currentStock.quantite_vendu_mois || 0) + parseInt(quantity);
+    const newStockActuel = parseInt(currentStock.stock_actuel) - parseInt(quantity);
+    const newValeurStock = newStockActuel * parseFloat(unit_price);
+
+    await client.query(
+      `UPDATE stock_records 
+       SET quantite_vendu_mois = $1,
+           stock_actuel = $2,
+           valeur_stock = $3
+       WHERE id_stock = $4`,
+      [newQuantiteVendu, newStockActuel, newValeurStock, currentStock.id_stock]
+    );
+
+    console.log('✅ ========================================');
+    console.log('✅ SALE COMPLETED SUCCESSFULLY');
+    console.log('✅ ========================================');
 
     await client.query('COMMIT');
 
@@ -180,32 +269,47 @@ exports.createSale = async (req, res) => {
 
   } catch (error) {
     await client.query('ROLLBACK');
-    console.error('Error creating sale:', error.message);
+    console.error('❌ ========================================');
+    console.error('❌ ERROR CREATING SALE');
+    console.error('❌ Error:', error.message);
+    console.error('❌ ========================================');
     res.status(500).json({ message: 'Server error' });
   } finally {
     client.release();
   }
 };
 
-// POST créer plusieurs ventes (checkout panier complet)
+// ============================================
+// CREATE BULK SALES
+// ============================================
 exports.createBulkSales = async (req, res) => {
   const client = await pool.connect();
   
   try {
     const { 
       items,
-      buyer_name, 
-      buyer_email, 
       payment_method,
       shipping_address
     } = req.body;
+
+    // ✅ RÉCUPÉRER L'UTILISATEUR CONNECTÉ (snake_case)
+    const userId = req.user.id;
+    const buyer_name = `${req.user.first_name} ${req.user.last_name}`;
+    const buyer_email = req.user.email;
+
+    console.log('🛒 ========================================');
+    console.log('🛒 CREATING BULK SALES');
+    console.log('🛒 Number of items:', items?.length);
+    console.log('🛒 Buyer:', buyer_name, `(ID: ${userId})`);
+    console.log('🛒 Buyer Email:', buyer_email);
+    console.log('🛒 ========================================');
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ message: 'Items array is required' });
     }
 
-    if (!buyer_name || !buyer_email || !payment_method) {
-      return res.status(400).json({ message: 'Missing required fields' });
+    if (!payment_method) {
+      return res.status(400).json({ message: 'Payment method is required' });
     }
 
     await client.query('BEGIN');
@@ -213,9 +317,16 @@ exports.createBulkSales = async (req, res) => {
     const createdSales = [];
     const errors = [];
 
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = today.getMonth() + 1;
+    const firstDayOfMonth = new Date(year, month - 1, 1);
+
     for (const item of items) {
       try {
         const { id_produit, quantity } = item;
+
+        console.log(`   Processing product ${id_produit}...`);
 
         const productResult = await client.query(
           'SELECT id_produit, nom_produit, prix, quantite, id_user FROM products WHERE id_produit = $1',
@@ -242,47 +353,99 @@ exports.createBulkSales = async (req, res) => {
         const total_amount = unit_price * quantity;
         const order_id = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
 
+        // 1. Créer la vente avec id_buyer
         const saleResult = await client.query(
           `INSERT INTO sales (
-            order_id, id_produit, id_seller, buyer_name, buyer_email, 
+            order_id, id_produit, id_seller, id_buyer, buyer_name, buyer_email, 
             quantity, unit_price, total_amount, payment_method, status
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
           RETURNING *`,
-          [order_id, id_produit, product.id_user, buyer_name, buyer_email, 
-           quantity, unit_price, total_amount, payment_method, 'completed']
+          [
+            order_id, 
+            id_produit, 
+            product.id_user, // seller
+            userId, // buyer
+            buyer_name, 
+            buyer_email, 
+            quantity, 
+            unit_price, 
+            total_amount, 
+            payment_method, 
+            'completed'
+          ]
         );
 
+        // 2. Mettre à jour la quantité du produit
         await client.query(
           'UPDATE products SET quantite = quantite - $1 WHERE id_produit = $2',
           [quantity, id_produit]
         );
 
-        const currentDate = new Date();
-        const currentMonth = currentDate.getMonth() + 1;
-        const currentYear = currentDate.getFullYear();
-        const firstDayOfMonth = new Date(currentYear, currentMonth - 1, 1);
-
-        const stockRecordResult = await client.query(
-          `SELECT id_stock FROM stock_records 
-           WHERE id_produit = $1 AND date >= $2
-           ORDER BY date DESC LIMIT 1`,
-          [id_produit, firstDayOfMonth]
+        // 3. Obtenir ou créer le stock du mois en cours
+        const currentStockResult = await client.query(
+          `SELECT * FROM stock_records 
+           WHERE id_produit = $1 
+           AND EXTRACT(YEAR FROM date) = $2 
+           AND EXTRACT(MONTH FROM date) = $3
+           ORDER BY date DESC
+           LIMIT 1`,
+          [id_produit, year, month]
         );
 
-        if (stockRecordResult.rows.length > 0) {
-          await client.query(
-            `UPDATE stock_records 
-             SET stock_actuel = stock_actuel - $1,
-                 quantite_vendu_mois = quantite_vendu_mois + $1,
-                 valeur_stock = (stock_actuel - $1) * prix_unitaire
-             WHERE id_stock = $2`,
-            [quantity, stockRecordResult.rows[0].id_stock]
+        let currentStock;
+
+        if (currentStockResult.rows.length > 0) {
+          currentStock = currentStockResult.rows[0];
+        } else {
+          const previousStockResult = await client.query(
+            `SELECT * FROM stock_records 
+             WHERE id_produit = $1 
+             AND date < $2
+             ORDER BY date DESC
+             LIMIT 1`,
+            [id_produit, firstDayOfMonth]
           );
+
+          let quantite_ouverture = 0;
+          if (previousStockResult.rows.length > 0) {
+            quantite_ouverture = previousStockResult.rows[0].stock_actuel || 0;
+          } else {
+            quantite_ouverture = product.quantite + quantity;
+          }
+
+          const valeur_stock = quantite_ouverture * unit_price;
+
+          const newStockResult = await client.query(
+            `INSERT INTO stock_records (
+              date, id_produit, quantite_ouverture_mois, quantite_vendu_mois,
+              stock_actuel, quantite_approvisionner, valeur_stock, prix_unitaire
+            ) VALUES ($1, $2, $3, 0, $4, 0, $5, $6)
+            RETURNING *`,
+            [firstDayOfMonth, id_produit, quantite_ouverture, quantite_ouverture, valeur_stock, unit_price]
+          );
+
+          currentStock = newStockResult.rows[0];
         }
 
+        // 4. Mettre à jour le stock du mois en cours
+        const newQuantiteVendu = parseInt(currentStock.quantite_vendu_mois || 0) + parseInt(quantity);
+        const newStockActuel = parseInt(currentStock.stock_actuel) - parseInt(quantity);
+        const newValeurStock = newStockActuel * parseFloat(unit_price);
+
+        await client.query(
+          `UPDATE stock_records 
+           SET quantite_vendu_mois = $1,
+               stock_actuel = $2,
+               valeur_stock = $3
+           WHERE id_stock = $4`,
+          [newQuantiteVendu, newStockActuel, newValeurStock, currentStock.id_stock]
+        );
+
         createdSales.push(saleResult.rows[0]);
+        console.log(`   ✅ Sale created for product ${id_produit}`);
 
       } catch (itemError) {
+        console.error(`   ❌ Error with product ${item.id_produit}:`, itemError.message);
         errors.push({ 
           id_produit: item.id_produit, 
           error: itemError.message 
@@ -300,6 +463,13 @@ exports.createBulkSales = async (req, res) => {
 
     await client.query('COMMIT');
 
+    console.log('✅ ========================================');
+    console.log(`✅ ${createdSales.length} SALE(S) CREATED SUCCESSFULLY`);
+    if (errors.length > 0) {
+      console.log(`⚠️ ${errors.length} ERROR(S) OCCURRED`);
+    }
+    console.log('✅ ========================================');
+
     res.status(201).json({
       message: `${createdSales.length} sale(s) created successfully`,
       sales: createdSales,
@@ -308,14 +478,19 @@ exports.createBulkSales = async (req, res) => {
 
   } catch (error) {
     await client.query('ROLLBACK');
-    console.error('Error creating bulk sales:', error.message);
+    console.error('❌ ========================================');
+    console.error('❌ ERROR CREATING BULK SALES');
+    console.error('❌ Error:', error.message);
+    console.error('❌ ========================================');
     res.status(500).json({ message: 'Server error' });
   } finally {
     client.release();
   }
 };
 
-// PUT mettre à jour le statut d'une vente
+// ============================================
+// UPDATE SALE STATUS
+// ============================================
 exports.updateSaleStatus = async (req, res) => {
   try {
     const { id } = req.params;
@@ -337,24 +512,155 @@ exports.updateSaleStatus = async (req, res) => {
 
     res.json(result.rows[0]);
   } catch (error) {
-    console.error(error.message);
+    console.error('❌ Error updating sale status:', error.message);
     res.status(500).json({ message: 'Server error' });
   }
 };
 
-// DELETE une vente
+// ============================================
+// DELETE SALE (AVEC VÉRIFICATION DES PERMISSIONS)
+// ============================================
 exports.deleteSale = async (req, res) => {
+  const client = await pool.connect();
+
   try {
     const { id } = req.params;
-    const result = await query('DELETE FROM sales WHERE id_sale = $1 RETURNING *', [id]);
-    
-    if (result.rows.length === 0) {
+    const userId = req.user.id; // Utilisateur connecté
+    const userRole = req.user.role; // Rôle de l'utilisateur
+
+    console.log('🗑️ ========================================');
+    console.log('🗑️ ATTEMPTING TO DELETE SALE');
+    console.log('🗑️ Sale ID:', id);
+    console.log('🗑️ User ID:', userId);
+    console.log('🗑️ User Role:', userRole);
+    console.log('🗑️ ========================================');
+
+    await client.query('BEGIN');
+
+    // 1. Récupérer les informations de la vente
+    const saleResult = await client.query(
+      'SELECT * FROM sales WHERE id_sale = $1',
+      [id]
+    );
+
+    if (saleResult.rows.length === 0) {
+      await client.query('ROLLBACK');
       return res.status(404).json({ message: 'Sale not found' });
     }
-    
-    res.json({ message: 'Sale deleted successfully' });
+
+    const sale = saleResult.rows[0];
+    const { id_produit, id_seller, quantity, unit_price, sale_date, order_id } = sale;
+
+    // ✅ VÉRIFICATION DES PERMISSIONS
+    // Seuls les admins ou le vendeur propriétaire peuvent supprimer
+    if (userRole !== 'admin' && userId !== id_seller) {
+      await client.query('ROLLBACK');
+      console.log('❌ Access denied - User is not admin or owner');
+      return res.status(403).json({ 
+        message: 'Access denied. Only admins or the seller who created this sale can delete it.',
+        reason: 'INSUFFICIENT_PERMISSIONS'
+      });
+    }
+
+    console.log('✅ Permission granted');
+    console.log('📦 Sale found:', order_id);
+    console.log('📦 Product ID:', id_produit);
+    console.log('📦 Quantity to restore:', quantity);
+
+    // 2. Vérifier si le produit existe encore
+    const productResult = await client.query(
+      'SELECT id_produit, nom_produit, quantite FROM products WHERE id_produit = $1',
+      [id_produit]
+    );
+
+    if (productResult.rows.length === 0) {
+      console.log('⚠️ Product no longer exists - stock will not be updated');
+      
+      // Supprimer la vente même si le produit n'existe plus
+      await client.query('DELETE FROM sales WHERE id_sale = $1', [id]);
+      await client.query('COMMIT');
+      
+      return res.json({
+        message: 'Sale deleted successfully. Note: Product no longer exists, stock was not updated.',
+        warning: 'PRODUCT_NOT_FOUND'
+      });
+    }
+
+    const product = productResult.rows[0];
+    console.log('✅ Product found:', product.nom_produit);
+
+    // 3. Remettre la quantité dans le produit
+    await client.query(
+      'UPDATE products SET quantite = quantite + $1 WHERE id_produit = $2',
+      [quantity, id_produit]
+    );
+
+    console.log('✅ Product quantity restored');
+
+    // 4. Mettre à jour le stock du mois de la vente
+    const saleDate = new Date(sale_date);
+    const year = saleDate.getFullYear();
+    const month = saleDate.getMonth() + 1;
+
+    const stockResult = await client.query(
+      `SELECT * FROM stock_records 
+       WHERE id_produit = $1 
+       AND EXTRACT(YEAR FROM date) = $2 
+       AND EXTRACT(MONTH FROM date) = $3
+       ORDER BY date DESC
+       LIMIT 1`,
+      [id_produit, year, month]
+    );
+
+    if (stockResult.rows.length > 0) {
+      const currentStock = stockResult.rows[0];
+      
+      // Diminuer quantite_vendu_mois et augmenter stock_actuel
+      const newQuantiteVendu = Math.max(0, parseInt(currentStock.quantite_vendu_mois || 0) - parseInt(quantity));
+      const newStockActuel = parseInt(currentStock.stock_actuel) + parseInt(quantity);
+      const newValeurStock = newStockActuel * parseFloat(unit_price);
+
+      await client.query(
+        `UPDATE stock_records 
+         SET quantite_vendu_mois = $1,
+             stock_actuel = $2,
+             valeur_stock = $3
+         WHERE id_stock = $4`,
+        [newQuantiteVendu, newStockActuel, newValeurStock, currentStock.id_stock]
+      );
+
+      console.log('✅ Stock record updated');
+      console.log('   - Quantity sold decreased by:', quantity);
+      console.log('   - Current stock increased by:', quantity);
+    } else {
+      console.log('⚠️ No stock record found for this month');
+    }
+
+    // 5. Supprimer la vente
+    await client.query('DELETE FROM sales WHERE id_sale = $1', [id]);
+
+    console.log('✅ ========================================');
+    console.log('✅ SALE DELETED SUCCESSFULLY');
+    console.log('✅ Product quantity restored');
+    console.log('✅ Stock record updated');
+    console.log('✅ ========================================');
+
+    await client.query('COMMIT');
+
+    res.json({ 
+      message: 'Sale deleted successfully. Product quantity and stock have been restored.',
+      restored_quantity: quantity,
+      product_name: product.nom_produit
+    });
+
   } catch (error) {
-    console.error(error.message);
-    res.status(500).json({ message: 'Server error' });
+    await client.query('ROLLBACK');
+    console.error('❌ ========================================');
+    console.error('❌ ERROR DELETING SALE');
+    console.error('❌ Error:', error.message);
+    console.error('❌ ========================================');
+    res.status(500).json({ message: 'Server error', error: error.message });
+  } finally {
+    client.release();
   }
 };
