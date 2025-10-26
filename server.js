@@ -15,7 +15,8 @@ const reviewRoutes = require('./routes/reviewRoutes');
 const userRoutes = require('./routes/userRoutes');
 const uploadRoutes = require('./routes/uploadRoutes');
 const newsletterRoutes = require('./routes/newsletterRoutes');
-const contactRoutes = require('./routes/contactRoutes'); // ✅ AJOUTER
+const contactRoutes = require('./routes/contactRoutes');
+const paymentRoutes = require('./routes/paymentRoutes'); // ✅ Routes de paiement CamPay
 
 // Import du middleware
 const checkBlockedStatus = require('./middleware/checkBlockedStatus');
@@ -61,7 +62,7 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-CamPay-Signature'] // ✅ Pour webhook CamPay
 }));
 
 // ===========================================
@@ -89,7 +90,10 @@ if (process.env.NODE_ENV !== 'production') {
 // Routes publiques (pas de vérification de blocage)
 app.use('/api/auth', authRoutes);
 app.use('/api/newsletters', newsletterRoutes);
-app.use('/api/contact', contactRoutes); // ✅ AJOUTER
+app.use('/api/contact', contactRoutes);
+
+// ✅ Routes de paiement (webhook public, autres protégées)
+app.use('/api/payment', paymentRoutes);
 
 // Routes protégées avec vérification de blocage
 app.use('/api/products', checkBlockedStatus, productRoutes);
@@ -110,7 +114,13 @@ app.get('/health', (req, res) => {
     message: 'Vide Grenier Kamer API is running',
     environment: process.env.NODE_ENV || 'development',
     timestamp: new Date().toISOString(),
-    version: '1.0.0'
+    version: '1.0.0',
+    services: {
+      database: '✓ Connected',
+      campay: process.env.CAMPAY_USERNAME ? '✓ Configured' : '✗ Not configured',
+      cloudinary: process.env.CLOUDINARY_CLOUD_NAME ? '✓ Configured' : '✗ Not configured',
+      email: process.env.BREVO_API_KEY ? '✓ Configured' : '✗ Not configured',
+    }
   });
 });
 
@@ -131,7 +141,12 @@ app.get('/', (req, res) => {
       users: '/api/users',
       upload: '/api/upload',
       newsletters: '/api/newsletters',
-      contact: '/api/contact', // ✅ AJOUTER
+      contact: '/api/contact',
+      payment: '/api/payment', // ✅ Routes de paiement
+    },
+    payment_methods: {
+      mobile_money: 'Orange Money, MTN Mobile Money (via CamPay)',
+      cards: 'Coming soon',
     }
   });
 });
@@ -142,15 +157,20 @@ app.get('/', (req, res) => {
 
 // Route 404
 app.use((req, res) => {
-  res.status(404).json({ message: 'Route not found' });
+  res.status(404).json({ 
+    message: 'Route not found',
+    path: req.path,
+    method: req.method
+  });
 });
 
 // Gestionnaire d'erreurs global
 app.use((err, req, res, next) => {
   console.error('❌ Error:', err.stack);
-  res.status(500).json({ 
+  res.status(err.status || 500).json({ 
     message: 'Something went wrong!',
-    error: process.env.NODE_ENV === 'production' ? {} : err.message
+    error: process.env.NODE_ENV === 'production' ? {} : err.message,
+    path: req.path
   });
 });
 
@@ -165,6 +185,11 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`🔗 Backend URL: ${process.env.NODE_ENV === 'production' ? 'https://videgrenierback.onrender.com' : `http://localhost:${PORT}`}`);
   console.log(`📁 Uploads directory: ${uploadsDir}`);
   console.log(`✅ CORS allowed origins:`, allowedOrigins);
+  console.log('-------------------------------------------');
+  console.log('📦 Available Services:');
+  console.log(`   💳 CamPay: ${process.env.CAMPAY_USERNAME ? '✓ Configured' : '✗ Not configured'}`);
+  console.log(`   ☁️  Cloudinary: ${process.env.CLOUDINARY_CLOUD_NAME ? '✓ Configured' : '✗ Not configured'}`);
+  console.log(`   📧 Brevo Email: ${process.env.BREVO_API_KEY ? '✓ Configured' : '✗ Not configured'}`);
   console.log('===========================================');
 });
 
@@ -180,6 +205,16 @@ process.on('SIGINT', () => {
 process.on('SIGTERM', () => {
   console.log('\n🛑 Shutting down server gracefully...');
   process.exit(0);
+});
+
+// Gestion des erreurs non capturées
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  process.exit(1);
 });
 
 module.exports = app;

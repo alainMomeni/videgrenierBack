@@ -35,6 +35,7 @@
   "license": "ISC",
   "dependencies": {
     "@sendinblue/client": "^3.3.1",
+    "axios": "^1.12.2",
     "bcryptjs": "^2.4.3",
     "cloudinary": "^2.7.0",
     "cors": "^2.8.5",
